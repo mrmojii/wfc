@@ -53,22 +53,6 @@ struct Rule
     RuleType type;
 };
 
-enum class RequirementType : int
-{
-    Top = 0,
-    Left = 1,
-    Right = 3,
-    Bot = 4,
-    Any = 5
-};
-
-struct Requirement
-{
-    ItemType item1;
-    ItemType item2;
-    RequirementType type;
-};
-
 struct World
 {
     CHAR_INFO* screenBuffer;
@@ -76,7 +60,6 @@ struct World
     std::vector<ItemType> buffer;
     std::vector<Item> items;
     std::vector<Rule> rules;
-    std::vector<Requirement> requirements;
     std::vector<int> entropy;
 };
 
@@ -115,19 +98,6 @@ enum Color
     BG_YELLOW = 0x00E0,
     BG_WHITE = 0x00F0,
 };
-
-RequirementType ReverseRequirementType(RequirementType type)
-{
-    switch (type)
-    {
-    case RequirementType::Top: return RequirementType::Bot;
-    case RequirementType::Bot: return RequirementType::Top;
-    case RequirementType::Left: return RequirementType::Right;
-    case RequirementType::Right: return RequirementType::Left;
-    }
-
-    return RequirementType::Top;
-}
 
 bool InitConsole(Console* console, short x, short y)
 {
@@ -278,18 +248,6 @@ void AddRule(World* world, Rule rule)
     }
 }
 
-void AddRequirement(World* world, Requirement req)
-{
-    if (req.type == RequirementType::Any)
-    {
-        AddRequirement(world, { req.item1, req.item2, RequirementType::Left });
-        AddRequirement(world, { req.item1, req.item2, RequirementType::Right });
-        AddRequirement(world, { req.item1, req.item2, RequirementType::Top });
-        AddRequirement(world, { req.item1, req.item2, RequirementType::Bot });
-        return;
-    }
-    world->requirements.push_back(req);
-}
 
 void InitItems(World* world)
 {
@@ -341,7 +299,6 @@ void InitItems(World* world)
     AddRule(world, { ItemType::Water, ItemType::Coast, RuleType::Bot });
 
     // coast-coast
-    // AddRequirement(world, { ItemType::Coast, ItemType::Water, RequirementType::Any });
 
     AddRule(world, { ItemType::Coast, ItemType::Coast, RuleType::Left });
     AddRule(world, { ItemType::Coast, ItemType::Coast, RuleType::Top });
@@ -386,9 +343,6 @@ void InitItems(World* world)
     AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Top });
     AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Left });
     AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Right });
-
-    AddRequirement(world, { ItemType::MysticForest, ItemType::Forest, RequirementType::Left });
-    AddRequirement(world, { ItemType::MysticForest, ItemType::Forest, RequirementType::Right });
 }
 
 std::vector<ItemType> GetAllTypesForRule(World* world, ItemType item, RuleType type)
@@ -404,27 +358,6 @@ std::vector<ItemType> GetAllTypesForRule(World* world, ItemType item, RuleType t
     }
 
     return items;
-}
-
-bool HasRequirement(World* world, ItemType item, RequirementType type)
-{
-    for (const Requirement& req : world->requirements)
-    {
-        if (req.item1 == item && req.type == type)
-            return true;
-    }
-    return false;
-}
-
-bool DoesFitRequirement(World* world, ItemType item1, ItemType item2, RequirementType type)
-{
-    for (const Requirement& req : world->requirements)
-    {
-        if (req.item1 == item1 && req.item2 == item2 && req.type == type)
-            return true;
-    }
-
-    return false;
 }
 
 std::array<ItemType, 5> GetSlice(World* world, int x, int y)
@@ -511,43 +444,9 @@ std::vector<ItemType> GetListOfPossible(World* world, int x, int y)
     return possible;
 }
 
-void UpdateListAfterRequirements(World* world, std::vector<ItemType>& possible, int x, int y)
-{
-    std::vector<ItemType> list = possible;
-    std::array<ItemType, 5> slice = GetSlice(world, x, y);
-
-    for (ItemType type : list)
-    {
-        for (int i = 0; i < 5; i++)
-        {
-            // skip the center of the Slice
-            if (i == 2)
-                continue;
-            if (slice[i] == ItemType::None || slice[i] == ItemType::Outside)
-                continue;
-            if (HasRequirement(world, slice[i], ReverseRequirementType((RequirementType)i)))
-            {
-                if (!DoesFitRequirement(world, slice[i], type, ReverseRequirementType((RequirementType)i)))
-                {
-                    possible.erase(std::find(possible.begin(), possible.end(), type));
-                }
-            }
-
-            if (HasRequirement(world, type, (RequirementType)i))
-            {
-                if (!DoesFitRequirement(world, type, slice[i], (RequirementType)i))
-                {
-                    possible.erase(std::find(possible.begin(), possible.end(), type));
-                }
-            }
-        }
-    }
-}
-
 void FillPosition(World* world, int x, int y)
 {
     std::vector<ItemType> possible = GetListOfPossible(world, x, y);
-    //UpdateListAfterRequirements(world, possible, x, y);
 
     if(!is_debug)
         assert(!possible.empty() && "List of possible items is empty !");
