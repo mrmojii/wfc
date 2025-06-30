@@ -300,18 +300,18 @@ void InitItems(World* world)
 
     // forest-mystic forest
 
-    AddRule(world, { ItemType::MysticForest, ItemType::MysticForest, RuleType::Left });
-    AddRule(world, { ItemType::MysticForest, ItemType::MysticForest, RuleType::Top });
+    /*AddRule(world, { ItemType::MysticForest, ItemType::MysticForest, RuleType::Left });
+    AddRule(world, { ItemType::MysticForest, ItemType::MysticForest, RuleType::Top });*/
 
-    AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Left });
-    AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Right });
-    //AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Top });
-    //AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Bot });
+    //AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Left });
+    //AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Right });
+    AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Top });
+    AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Bot });
 
     //AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Bot });
     //AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Top });
-    //AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Left });
-    //AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Right });
+    AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Left });
+    AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Right });
 }
 
 uint32_t GetAllTypesForRule(World* world, ItemType item, RuleType type)
@@ -333,11 +333,10 @@ void FillPosition(World* world, int x, int y)
 {
     uint32_t p = world->entropy[x + y * world->console.x];
 
-    if (!is_debug)
-        assert(p != 0 && "List of possible items is empty !");
-    else if (p == (uint32_t)ItemType::None)
+    if (p == (uint32_t)ItemType::None)
     {
         Draw(world, x, y, 'X');
+        Render(world);
         return;
     }
 
@@ -391,7 +390,13 @@ void UpdateEntropy(World* world, int x, int y)
 
                 uint32_t newentropy = world->entropy[index] & possibles;
                 const bool updateNeighbours = world->entropy[index] != newentropy;
+                if (newentropy == 0)
+                {
+                    int test123 = 0;
+                    (void)test123;
+                }
                 world->entropy[index] = newentropy;
+
 
                 // TODO: do it in a different way?
                 if (GetEntropySize(world->entropy[index]) == 1)
@@ -406,6 +411,58 @@ void UpdateEntropy(World* world, int x, int y)
     }
 }
 
+void ClearWorld(World* world)
+{
+    memset(world->screenBuffer, 0, sizeof(CHAR_INFO) * world->console.x * world->console.y);
+
+    for (int y = 0; y < world->console.y; y++)
+    {
+        for (int x = 0; x < world->console.x; x++)
+        {
+            FillDataWithAllTypes(world->entropy[x + y * world->console.x]);
+        }
+    }
+}
+
+void GenerateWorld(World* world)
+{
+    int x = std::rand() % world->console.x;
+    int y = std::rand() % world->console.y;
+    int counter = 0;
+
+    while (true)
+    {
+        FillPosition(world, x, y);
+        UpdateEntropy(world, x, y);
+
+        int min = INT_MAX;
+        for (int i = 0; i < world->entropy.size(); i++)
+        {
+            const size_t size = GetEntropySize(world->entropy[i]);
+            if (size != 1 && min > size)
+            {
+                min = size;
+                y = i / world->console.x;
+                x = i - y * world->console.x;
+            }
+        }
+
+        if (min == INT_MAX)
+            break;
+
+        if (is_debug)
+        {
+            getchar();
+            Render(world);
+        }
+
+        counter++;
+
+    }
+
+    Render(world);
+}
+
 int main()
 {
     srand(time(0));
@@ -416,51 +473,15 @@ int main()
         return 1;
 
     world.screenBuffer = new CHAR_INFO[world.console.x * world.console.y];
-    memset(world.screenBuffer, 0, sizeof(CHAR_INFO) * world.console.x * world.console.y);
-
-    InitItems(&world);
-
     world.entropy.resize(world.console.x * world.console.y);
 
-    for (int y = 0; y < world.console.y; y++)
-    {
-        for (int x = 0; x < world.console.x; x++)
-        {
-            FillDataWithAllTypes(world.entropy[x + y * world.console.x]);
-        }
-    }
-
-    int x = std::rand() % world.console.x;
-    int y = std::rand() % world.console.y;
+    InitItems(&world);
+    ClearWorld(&world);
 
     while (true)
     {
-        FillPosition(&world, x, y);
-        UpdateEntropy(&world, x, y);
-
-        int min = INT_MAX;
-        for (int i = 0; i < world.entropy.size(); i++)
-        {
-            const size_t size = GetEntropySize(world.entropy[i]);
-            if (size != 1 && min > size)
-            {
-                min = size;
-                y = i / world.console.x;
-                x = i - y * world.console.x;
-            }
-        }
-
-        if (min == INT_MAX)
-            break;
-
-        if (is_debug)
-        {
-            getchar();
-            Render(&world);
-        }
-
+        GenerateWorld(&world);
+        int ret = getchar();
+        ClearWorld(&world);
     }
-
-    Render(&world);
-    int ret = getchar();
 }
