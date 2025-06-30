@@ -2,24 +2,34 @@
 #include <stdlib.h>
 #include <time.h>
 #include <vector>
-#include <array>
 #include <assert.h>
+#include <limits>
+#include <type_traits>
 
 #include <windows.h>
+#undef max
+#undef min
 
-static bool is_debug = true;
+static bool is_debug = false;
 
 enum class ItemType
 {
-    None = 0,
-    Outside,
-    Water,
-    Coast,
-    Land,
-    Forest,
-    ThickForest,
-    MysticForest
+    None            = 0,
+    Water           = 1,
+    Coast           = 2,
+    Land            = 4,
+    Forest          = 8,
+    ThickForest     = 16,
+    MysticForest    = 32,
+    LAST
 };
+
+namespace std {
+    template<> class numeric_limits<ItemType> {
+    public:
+        static size_t max() noexcept { return (size_t)ItemType::LAST - 1; }
+    };
+}
 
 struct Item
 {
@@ -31,10 +41,7 @@ struct Console
 {
     short x;
     short y;
-    short fontX;
-    short fontY;
     HANDLE handle;
-    HANDLE handleInput;
     SMALL_RECT rectWindow;
 };
 
@@ -57,10 +64,9 @@ struct World
 {
     CHAR_INFO* screenBuffer;
     Console console;
-    std::vector<ItemType> buffer;
     std::vector<Item> items;
     std::vector<Rule> rules;
-    std::vector<int> entropy;
+    std::vector<uint32_t> entropy;
 };
 
 enum Color
@@ -99,10 +105,27 @@ enum Color
     BG_WHITE = 0x00F0,
 };
 
+void FillDataWithAllTypes(uint32_t& data)
+{
+    data = 0;
+
+    for (size_t i = 1; i <= std::numeric_limits<ItemType>::max(); i *= 2)
+    {
+        data |= i;
+    }
+}
+
+size_t GetEntropySize(uint32_t entropy)
+{
+    // https://stackoverflow.com/questions/109023/count-the-number-of-set-bits-in-a-32-bit-integer
+    entropy = entropy - ((entropy >> 1) & 0x55555555);
+    entropy = (entropy & 0x33333333) + ((entropy >> 2) & 0x33333333);
+    return (((entropy + (entropy >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+}
+
 bool InitConsole(Console* console, short x, short y)
 {
     console->handle = GetStdHandle(STD_OUTPUT_HANDLE);
-    console->handleInput = GetStdHandle(STD_INPUT_HANDLE);
 
     if (console->handle == INVALID_HANDLE_VALUE)
     {
@@ -113,63 +136,10 @@ bool InitConsole(Console* console, short x, short y)
     console->x = x;
     console->y = y;
 
-    // Change console visual size to a minimum so ScreenBuffer can shrink
-    // below the actual visual size
-    console->rectWindow = { 0, 0, 1, 1 };
-    SetConsoleWindowInfo(console->handle, TRUE, &console->rectWindow);
-
-    COORD coord = { x,y };
-    if (!SetConsoleScreenBufferSize(console->handle, coord))
-    {
-        std::cout << "[ERROR]: failed to set console screen buffer size\n";
-        return false;
-    }
-
-    if (!SetConsoleActiveScreenBuffer(console->handle))
-    {
-        std::cout << "[ERROR]: failed to set active screen buffer\n";
-        return false;
-    }
-
-    CONSOLE_FONT_INFOEX cfi;
-    cfi.cbSize = sizeof(cfi);
-    cfi.nFont = 0;
-    cfi.dwFontSize.X = console->fontX;
-    cfi.dwFontSize.Y = console->fontY;
-    cfi.FontFamily = FF_DONTCARE;
-    cfi.FontWeight = FW_NORMAL;
-
-    wcscpy_s(cfi.FaceName, L"Consolas");
-    if (!SetCurrentConsoleFontEx(console->handle, FALSE, &cfi))
-    {
-        std::cout << "[ERROR]: failed to set console font\n";
-        return false;
-    }
-
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    if (!GetConsoleScreenBufferInfo(console->handle, &csbi))
-    {
-        std::cout << "[ERROR]: failed to get console screen buffer info\n";
-        return false;
-    }
-
-    if (x > csbi.dwMaximumWindowSize.X || y > csbi.dwMaximumWindowSize.Y)
-    {
-        std::cout << "[ERROR]: font size is too big\n";
-        return false;
-    }
-
     console->rectWindow = { 0, 0, short(console->x - 1), short(console->y - 1) };
     if (!SetConsoleWindowInfo(console->handle, TRUE, &console->rectWindow))
     {
         std::cout << "[ERROR]: failed to set console window info\n";
-        return false;
-    }
-
-    // allow inputs here
-    if (!SetConsoleMode(console->handleInput, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT))
-    {
-        std::cout << "[ERROR]: failed to set console mode\n";
         return false;
     }
 
@@ -196,7 +166,7 @@ void Add(World* world, ItemType type, int x, int y)
     if (it == world->items.end())
         return;
 
-    world->buffer[x + y * world->console.x] = type;
+    world->entropy[x + y * world->console.x] = (uint32_t)type;
     Draw(world, x, y, it->data.Char.UnicodeChar, it->data.Attributes);
 }
 
@@ -247,7 +217,6 @@ void AddRule(World* world, Rule rule)
         world->rules.push_back(rule);
     }
 }
-
 
 void InitItems(World* world)
 {
@@ -330,40 +299,65 @@ void InitItems(World* world)
     AddRule(world, { ItemType::Forest, ItemType::ThickForest, RuleType::Top });
 
     // forest-mystic forest
-    
+
     AddRule(world, { ItemType::MysticForest, ItemType::MysticForest, RuleType::Left });
     AddRule(world, { ItemType::MysticForest, ItemType::MysticForest, RuleType::Top });
 
     AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Left });
     AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Right });
-    AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Top });
-    AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Bot });
+    //AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Top });
+    //AddRule(world, { ItemType::MysticForest, ItemType::ThickForest, RuleType::Bot });
 
-    AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Bot });
-    AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Top });
-    AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Left });
-    AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Right });
+    //AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Bot });
+    //AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Top });
+    //AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Left });
+    //AddRule(world, { ItemType::MysticForest, ItemType::Forest, RuleType::Right });
 }
 
-std::vector<ItemType> GetAllTypesForRule(World* world, ItemType item, RuleType type)
+uint32_t GetAllTypesForRule(World* world, ItemType item, RuleType type)
 {
-    std::vector<ItemType> items;
+    uint32_t items = 0;
 
     for (const Rule& rule : world->rules)
     {
         if (rule.item1 != item || rule.type != type)
             continue;
 
-        items.push_back(rule.item2);
+        items |= (uint32_t)rule.item2;
     }
 
     return items;
 }
 
-std::array<ItemType, 5> GetSlice(World* world, int x, int y)
+void FillPosition(World* world, int x, int y)
 {
-    std::array<ItemType, 5> slice = {};
-    int iter = 0;
+    uint32_t p = world->entropy[x + y * world->console.x];
+
+    if (!is_debug)
+        assert(p != 0 && "List of possible items is empty !");
+    else if (p == (uint32_t)ItemType::None)
+    {
+        Draw(world, x, y, 'X');
+        return;
+    }
+
+    std::vector<uint32_t> items;
+    for (int i = 1; i <= std::numeric_limits<ItemType>::max(); i *= 2)
+    {
+        if (i > p)
+            break;
+        if (p & i)
+            items.push_back(i);
+    }
+
+    const int rand = std::rand() % items.size();
+    Add(world, (ItemType)items[rand], x, y);
+}
+
+void UpdateEntropy(World* world, int x, int y)
+{
+    uint32_t mainPossibles = world->entropy[x + y * world->console.x];
+    int rule = -1;
 
     for (int j = -1; j < 2; j++)
     {
@@ -373,112 +367,40 @@ std::array<ItemType, 5> GetSlice(World* world, int x, int y)
             if (abs(i) + abs(j) >= 2)
                 continue;
 
-            int posX = x + i;
-            int posY = y + j;
+            ++rule;
 
-            if (InsideWorld(world, posX, posY))
-            {
-                slice[iter++] = world->buffer[posX + posY * world->console.x];
-            }
-            else
-            {
-                slice[iter++] = ItemType::Outside;
-            }
-        }
-    }
-
-    return slice;
-}
-
-bool IsSliceEmpty(const std::array<ItemType, 5>& slice)
-{
-    for (ItemType type : slice)
-    {
-        if (type != ItemType::None && type != ItemType::Outside)
-            return false;
-    }
-
-    return true;
-}
-
-std::vector<ItemType> GetListOfPossible(World* world, int x, int y)
-{
-    std::array<ItemType, 5> slice = GetSlice(world, x, y);
-    std::vector<ItemType> possible;
-
-    if (IsSliceEmpty(slice))
-    {
-        for (const Item& item : world->items)
-        {
-            possible.push_back(item.type);
-        }
-
-        return possible;
-    }
-
-    for (int i = 0; i < 5; i++)
-    {
-        if (slice[i] == ItemType::None || slice[i] == ItemType::Outside)
-            continue;
-
-        // skip the center of the Slice
-        if (i == 2)
-            continue;
-
-        std::vector<ItemType> types = GetAllTypesForRule(world, slice[i], (RuleType)i);
-        if (possible.empty())
-        {
-            possible.insert(possible.begin(), types.begin(), types.end());
-        }
-        else
-        {
-            possible.erase(std::remove_if(possible.begin(), possible.end(), [&](ItemType t)
-                {
-                    auto it = std::find(types.begin(), types.end(), t);
-                    return it == types.end();
-                }
-            ), possible.end());
-        }
-    }
-
-    return possible;
-}
-
-void FillPosition(World* world, int x, int y)
-{
-    std::vector<ItemType> possible = GetListOfPossible(world, x, y);
-
-    if(!is_debug)
-        assert(!possible.empty() && "List of possible items is empty !");
-    else if(possible.empty())
-    {
-        Draw(world, x, y, 'X');
-        return;
-    }
-
-    const int rand = std::rand() % possible.size();
-    Add(world, possible[rand], x, y);
-}
-
-void UpdateEntropy(World* world, int x, int y)
-{
-    world->entropy[x + y * world->console.x] = INT_MAX;
-
-    for (int j = -1; j < 2; j++)
-    {
-        for (int i = -1; i < 2; i++)
-        {
-            // remove diagonal
-            if (abs(i) + abs(j) >= 2)
+            if (i == 0 && j == 0)
                 continue;
 
             const int posX = x + i;
             const int posY = y + j;
             const int index = posX + posY * world->console.x;
 
-            if (InsideWorld(world, posX, posY) && world->buffer[index] == ItemType::None)
+            if (InsideWorld(world, posX, posY))
             {
-                world->entropy[index] = GetListOfPossible(world, posX, posY).size();
+                uint32_t possibles = 0;
+
+                for (uint32_t t = 1; t <= std::numeric_limits<ItemType>::max(); t *= 2)
+                {
+                    if (mainPossibles & t)
+                    {
+                        uint32_t types = GetAllTypesForRule(world, (ItemType)t, (RuleType)rule);
+                        possibles |= types;
+                    }
+                }
+
+                uint32_t newentropy = world->entropy[index] & possibles;
+                const bool updateNeighbours = world->entropy[index] != newentropy;
+                world->entropy[index] = newentropy;
+
+                // TODO: do it in a different way?
+                if (GetEntropySize(world->entropy[index]) == 1)
+                {
+                    Add(world, (ItemType)newentropy, posX, posY);
+                }
+
+                if (updateNeighbours)
+                    UpdateEntropy(world, posX, posY);
             }
         }
     }
@@ -490,18 +412,23 @@ int main()
 
     World world = {};
 
-    world.console.fontX = 0;
-    world.console.fontY = 12;
-    if (!InitConsole(&world.console, 60, 15))
+    if (!InitConsole(&world.console, 60, 20))
         return 1;
 
     world.screenBuffer = new CHAR_INFO[world.console.x * world.console.y];
     memset(world.screenBuffer, 0, sizeof(CHAR_INFO) * world.console.x * world.console.y);
-    world.buffer.resize(world.console.x * world.console.y);
-    world.entropy.resize(world.console.x * world.console.y);
-    std::fill(world.entropy.begin(), world.entropy.end(), INT_MAX - 1);
 
     InitItems(&world);
+
+    world.entropy.resize(world.console.x * world.console.y);
+
+    for (int y = 0; y < world.console.y; y++)
+    {
+        for (int x = 0; x < world.console.x; x++)
+        {
+            FillDataWithAllTypes(world.entropy[x + y * world.console.x]);
+        }
+    }
 
     int x = std::rand() % world.console.x;
     int y = std::rand() % world.console.y;
@@ -514,11 +441,12 @@ int main()
         int min = INT_MAX;
         for (int i = 0; i < world.entropy.size(); i++)
         {
-            if (min > world.entropy[i])
+            const size_t size = GetEntropySize(world.entropy[i]);
+            if (size != 1 && min > size)
             {
-                min = world.entropy[i];
+                min = size;
                 y = i / world.console.x;
-                x = i - y*world.console.x;
+                x = i - y * world.console.x;
             }
         }
 
@@ -530,7 +458,7 @@ int main()
             getchar();
             Render(&world);
         }
-       
+
     }
 
     Render(&world);
